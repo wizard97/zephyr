@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 #include <zephyr/kernel.h>
+#include <zephyr/sys/atomic.h>
 #include <kswap.h>
 #include <ksched.h>
 #include <ipi.h>
@@ -12,7 +13,7 @@
 static int slice_ticks = DIV_ROUND_UP(CONFIG_TIMESLICE_SIZE * Z_HZ_ticks, Z_HZ_ms);
 static int slice_max_prio = CONFIG_TIMESLICE_PRIORITY;
 static struct _timeout slice_timeouts[CONFIG_MP_MAX_NUM_CPUS];
-static bool slice_expired[CONFIG_MP_MAX_NUM_CPUS];
+static ATOMIC_DEFINE(slice_expired, CONFIG_MP_MAX_NUM_CPUS);
 
 #ifdef CONFIG_SWAP_NONATOMIC
 /* If z_swap() isn't atomic, then it's possible for a timer interrupt
@@ -63,7 +64,7 @@ static void slice_timeout(struct _timeout *timeout)
 {
 	int cpu = ARRAY_INDEX(slice_timeouts, timeout);
 
-	slice_expired[cpu] = true;
+	atomic_set_bit(slice_expired, cpu);
 
 	/* We need an IPI if we just handled a timeslice expiration
 	 * for a different CPU.
@@ -78,7 +79,7 @@ static void slice_reset(int slice_size)
 	int cpu = _current_cpu->id;
 
 	/* Best-effort cancel: if the slice timeout is already in flight,
-	 * its handler only flips slice_expired[cpu] (which we clear below)
+	 * its handler only sets the CPU's expiration bit (which we clear below)
 	 * and possibly raises an IPI -- harmless either way.
 	 */
 	(void)z_try_abort_timeout(&slice_timeouts[cpu]);
@@ -88,12 +89,12 @@ static void slice_reset(int slice_size)
 		 * announce window, so subtract 1 to cancel z_add_timeout()'s
 		 * "+1" round-up and land at exactly slice_size ticks.
 		 */
-		int delay = slice_expired[cpu] ? slice_size - 1 : slice_size;
+		int delay = atomic_test_bit(slice_expired, cpu) ? slice_size - 1 : slice_size;
 
 		z_add_timeout(&slice_timeouts[cpu], slice_timeout,
 			      K_TICKS(delay));
 	}
-	slice_expired[cpu] = false;
+	atomic_clear_bit(slice_expired, cpu);
 }
 
 void z_time_slice_reset(struct k_thread *thread)
@@ -152,7 +153,7 @@ void z_time_slice(void)
 	 * the scheduler lock to synchronize pending_current.
 	 */
 	if (!IS_ENABLED(CONFIG_SWAP_NONATOMIC) &&
-	    !slice_expired[_current_cpu->id]) {
+	    !atomic_test_bit(slice_expired, _current_cpu->id)) {
 		return;
 	}
 
@@ -170,7 +171,7 @@ void z_time_slice(void)
 
 	int slice_size = 0;
 
-	if (slice_expired[_current_cpu->id]) {
+	if (atomic_test_bit(slice_expired, _current_cpu->id)) {
 		slice_size = z_time_slice_size(curr);
 	}
 
