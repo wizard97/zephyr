@@ -146,6 +146,16 @@ void k_thread_time_slice_set(struct k_thread *thread, int32_t thread_slice_ticks
 /* Called out of each timer and IPI interrupt */
 void z_time_slice(void)
 {
+	/*
+	 * Atomic context switches need no scheduler work until this CPU's
+	 * time slice expires. Non-atomic context switches must still take
+	 * the scheduler lock to synchronize pending_current.
+	 */
+	if (!IS_ENABLED(CONFIG_SWAP_NONATOMIC) &&
+	    !slice_expired[_current_cpu->id]) {
+		return;
+	}
+
 	k_spinlock_key_t key = k_spin_lock(&_sched_spinlock);
 	struct k_thread *curr = _current;
 
