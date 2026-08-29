@@ -46,7 +46,11 @@ if((CONFIG_MP_MAX_NUM_CPUS GREATER 1) OR (CONFIG_SMP))
   zephyr_library_sources(smp.c)
 endif()
 
-zephyr_cc_option_ifdef(CONFIG_USERSPACE -mno-outline-atomics)
+# Cortex-A53 has no LSE instructions to select at run time, so inline
+# exclusive-access atomics avoid unnecessary helper calls.
+if(CONFIG_USERSPACE OR CONFIG_CPU_CORTEX_A53)
+  zephyr_cc_option(-mno-outline-atomics)
+endif()
 zephyr_cc_option_ifdef(CONFIG_FRAME_POINTER -mno-omit-leaf-frame-pointer)
 
 # GCC may generate ldp/stp instructions with the Advanced SIMD Qn registers for
