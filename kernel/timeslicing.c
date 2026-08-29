@@ -12,7 +12,22 @@
 static int slice_ticks = DIV_ROUND_UP(CONFIG_TIMESLICE_SIZE * Z_HZ_ticks, Z_HZ_ms);
 static int slice_max_prio = CONFIG_TIMESLICE_PRIORITY;
 static struct _timeout slice_timeouts[CONFIG_MP_MAX_NUM_CPUS];
-static ATOMIC_DEFINE(slice_expired, CONFIG_MP_MAX_NUM_CPUS);
+
+/* Separate independently updated CPU flags when the cache line size is known
+ * at build time. UP and runtime-detected-cache configurations use natural
+ * alignment. The flags remain atomic because timeouts can expire on another CPU.
+ */
+#if defined(CONFIG_SMP) && defined(CONFIG_DCACHE_LINE_SIZE) && (CONFIG_DCACHE_LINE_SIZE > 0)
+#define SLICE_EXPIRED_ALIGNMENT MAX(CONFIG_DCACHE_LINE_SIZE, __alignof(atomic_t))
+#else
+#define SLICE_EXPIRED_ALIGNMENT __alignof(atomic_t)
+#endif
+
+struct slice_expiration {
+	atomic_t expired;
+} __aligned(SLICE_EXPIRED_ALIGNMENT);
+
+static struct slice_expiration slice_expired[CONFIG_MP_MAX_NUM_CPUS];
 
 #ifdef CONFIG_SWAP_NONATOMIC
 /* If z_swap() isn't atomic, then it's possible for a timer interrupt
@@ -63,7 +78,7 @@ static void slice_timeout(struct _timeout *timeout)
 {
 	int cpu = ARRAY_INDEX(slice_timeouts, timeout);
 
-	atomic_set_bit(slice_expired, cpu);
+	atomic_set(&slice_expired[cpu].expired, 1);
 
 	/* We need an IPI if we just handled a timeslice expiration
 	 * for a different CPU.
@@ -79,7 +94,7 @@ void z_reset_time_slice(struct k_thread *thread)
 	int slice_size = z_time_slice_size(thread);
 
 	z_abort_timeout(&slice_timeouts[cpu]);
-	atomic_clear_bit(slice_expired, cpu);
+	atomic_clear(&slice_expired[cpu].expired);
 	if (slice_size != 0) {
 		z_add_timeout(&slice_timeouts[cpu], slice_timeout,
 			      K_TICKS(slice_size - 1));
@@ -137,7 +152,7 @@ void z_time_slice(void)
 	 * the scheduler lock to synchronize pending_current.
 	 */
 	if (!IS_ENABLED(CONFIG_SWAP_NONATOMIC) &&
-	    !atomic_test_bit(slice_expired, _current_cpu->id)) {
+	    !atomic_get(&slice_expired[_current_cpu->id].expired)) {
 		return;
 	}
 
@@ -153,7 +168,8 @@ void z_time_slice(void)
 	pending_current = NULL;
 #endif
 
-	if (atomic_test_bit(slice_expired, _current_cpu->id) && (z_time_slice_size(curr) != 0)) {
+	if (atomic_get(&slice_expired[_current_cpu->id].expired) &&
+	    (z_time_slice_size(curr) != 0)) {
 #ifdef CONFIG_TIMESLICE_PER_THREAD
 		k_thread_timeslice_fn_t handler = curr->base.slice_expired;
 
