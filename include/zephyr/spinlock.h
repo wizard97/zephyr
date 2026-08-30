@@ -330,14 +330,16 @@ static ALWAYS_INLINE void k_spin_unlock(struct k_spinlock *l,
 	/* Give the spinlock to the next CPU in a FIFO */
 	(void)atomic_inc(&l->owner);
 #else
-	/* Strictly we don't need atomic_clear() here (which is an
-	 * exchange operation that returns the old value).  We are always
-	 * setting a zero and (because we hold the lock) know the existing
-	 * state won't change due to a race.  But some architectures need
-	 * a memory barrier when used like this, and we don't have a
-	 * Zephyr framework for that.
+#ifdef CONFIG_ATOMIC_OPERATIONS_BUILTIN
+	/* Only the owner releases the lock, and the old value is unused.
+	 * A sequentially consistent store publishes the critical section
+	 * without a read-modify-write operation on the lock word.
 	 */
+	__atomic_store_n(&l->locked, 0, __ATOMIC_SEQ_CST);
+#else
+	/* Architecture-specific atomic backends provide the required barriers. */
 	(void)atomic_clear(&l->locked);
+#endif
 #endif /* CONFIG_TICKET_SPINLOCKS */
 #endif /* CONFIG_SMP */
 	arch_irq_unlock(key.key);
@@ -385,7 +387,11 @@ static ALWAYS_INLINE void k_spin_release(struct k_spinlock *l)
 #ifdef CONFIG_TICKET_SPINLOCKS
 	(void)atomic_inc(&l->owner);
 #else
+#ifdef CONFIG_ATOMIC_OPERATIONS_BUILTIN
+	__atomic_store_n(&l->locked, 0, __ATOMIC_SEQ_CST);
+#else
 	(void)atomic_clear(&l->locked);
+#endif
 #endif /* CONFIG_TICKET_SPINLOCKS */
 #endif /* CONFIG_SMP */
 }
