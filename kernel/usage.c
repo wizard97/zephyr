@@ -98,6 +98,14 @@ void z_sched_usage_start(struct k_thread *thread)
 
 void z_sched_usage_stop(void)
 {
+	/* Only this CPU writes usage0, and callers keep local IRQs masked.
+	 * IRQ entry may already have stopped accounting before the scheduler
+	 * reaches this hook, leaving no shared counters to update.
+	 */
+	if (_current_cpu->usage0 == 0U) {
+		return;
+	}
+
 	k_spinlock_key_t k   = k_spin_lock(&usage_lock);
 
 	struct _cpu     *cpu = _current_cpu;
