@@ -16,7 +16,65 @@
 #error "No data backend configured for CONFIG_SCHED_THREAD_USAGE"
 #endif /* !CONFIG_USE_SWITCH && !CONFIG_INSTRUMENT_THREAD_SWITCHING */
 
+#ifdef CONFIG_ARM64
+#include <zephyr/arch/arm64/cpu.h>
+#endif
+
+#define USAGE_LOCK_COUNT (IS_ENABLED(CONFIG_SMP) ? CONFIG_MP_MAX_NUM_CPUS : 1)
+
+#ifdef CONFIG_SMP
+/* Keep independent accounting locks off the same cache line when its size
+ * is known at build time. UP retains the scalar lock and its original size.
+ */
+struct cpu_usage_lock {
+	struct k_spinlock lock;
+}
+#ifdef CONFIG_ARM64
+__aligned(L1_CACHE_BYTES)
+#elif defined(CONFIG_DCACHE_LINE_SIZE) && (CONFIG_DCACHE_LINE_SIZE > 0)
+__aligned(CONFIG_DCACHE_LINE_SIZE)
+#endif
+;
+static struct cpu_usage_lock usage_locks[USAGE_LOCK_COUNT];
+#else
 static struct k_spinlock usage_lock;
+#endif
+
+struct usage_lock_keys {
+	k_spinlock_key_t cpu[USAGE_LOCK_COUNT];
+};
+
+static inline struct k_spinlock *usage_lock_get(int cpu)
+{
+#ifdef CONFIG_SMP
+	return &usage_locks[cpu].lock;
+#else
+	ARG_UNUSED(cpu);
+	return &usage_lock;
+#endif
+}
+
+/* Queries, resets, and tracking changes exclude every accounting writer.
+ * Acquire in CPU order and release in reverse, preserving the original IRQ
+ * state only after the final lock is released. IRQ accounting takes only its
+ * local lock; every multi-lock path follows this same order.
+ */
+static inline struct usage_lock_keys usage_lock_all(void)
+{
+	struct usage_lock_keys keys;
+
+	for (int cpu = 0; cpu < USAGE_LOCK_COUNT; cpu++) {
+		keys.cpu[cpu] = k_spin_lock(usage_lock_get(cpu));
+	}
+	return keys;
+}
+
+static inline void usage_unlock_all(struct usage_lock_keys keys)
+{
+	for (int cpu = USAGE_LOCK_COUNT - 1; cpu >= 0; cpu--) {
+		k_spin_unlock(usage_lock_get(cpu), keys.cpu[cpu]);
+	}
+}
 
 static uint32_t usage_now(void)
 {
@@ -74,9 +132,9 @@ static void sched_thread_update_usage(struct k_thread *thread, uint32_t cycles)
 void z_sched_usage_start(struct k_thread *thread)
 {
 #ifdef CONFIG_SCHED_THREAD_USAGE_ANALYSIS
-	k_spinlock_key_t  key;
+	struct usage_lock_keys key;
 
-	key = k_spin_lock(&usage_lock);
+	key = usage_lock_all();
 
 	_current_cpu->usage0 = usage_now();   /* Always update */
 
@@ -85,7 +143,7 @@ void z_sched_usage_start(struct k_thread *thread)
 		thread->base.usage.current = 0;
 	}
 
-	k_spin_unlock(&usage_lock, key);
+	usage_unlock_all(key);
 #else
 	/* One write through a volatile pointer doesn't require
 	 * synchronization as long as _usage() treats it as volatile
@@ -106,7 +164,11 @@ void z_sched_usage_stop(void)
 		return;
 	}
 
-	k_spinlock_key_t k   = k_spin_lock(&usage_lock);
+	/* IRQs are masked, so this CPU and its current thread cannot migrate.
+	 * Scheduler handoff orders the thread's accounting writes across CPUs.
+	 */
+	struct k_spinlock *lock = usage_lock_get(_current_cpu->id);
+	k_spinlock_key_t k = k_spin_lock(lock);
 
 	struct _cpu     *cpu = _current_cpu;
 
@@ -123,18 +185,18 @@ void z_sched_usage_stop(void)
 	}
 
 	cpu->usage0 = 0;
-	k_spin_unlock(&usage_lock, k);
+	k_spin_unlock(lock, k);
 }
 
 #ifdef CONFIG_SCHED_THREAD_USAGE_ALL
 void z_sched_cpu_usage(uint8_t cpu_id, struct k_thread_runtime_stats *stats)
 {
-	k_spinlock_key_t  key;
+	struct usage_lock_keys key;
 	struct _cpu *cpu;
 	uint32_t pending = 0U;
 	bool pending_is_idle = false;
 
-	key = k_spin_lock(&usage_lock);
+	key = usage_lock_all();
 	cpu = &_kernel.cpus[cpu_id];
 
 	if (cpu == _current_cpu) {
@@ -191,7 +253,7 @@ void z_sched_cpu_usage(uint8_t cpu_id, struct k_thread_runtime_stats *stats)
 
 	stats->execution_cycles = stats->total_cycles + stats->idle_cycles;
 
-	k_spin_unlock(&usage_lock, key);
+	usage_unlock_all(key);
 }
 #endif /* CONFIG_SCHED_THREAD_USAGE_ALL */
 
@@ -199,9 +261,9 @@ void z_sched_thread_usage(struct k_thread *thread,
 			  struct k_thread_runtime_stats *stats)
 {
 	struct _cpu *cpu;
-	k_spinlock_key_t  key;
+	struct usage_lock_keys key;
 
-	key = k_spin_lock(&usage_lock);
+	key = usage_lock_all();
 	cpu = _current_cpu;
 
 
@@ -246,19 +308,19 @@ void z_sched_thread_usage(struct k_thread *thread,
 	stats->idle_cycles = 0;
 #endif /* CONFIG_SCHED_THREAD_USAGE_ALL */
 
-	k_spin_unlock(&usage_lock, key);
+	usage_unlock_all(key);
 }
 
 #ifdef CONFIG_SCHED_THREAD_USAGE_ANALYSIS
 int k_thread_runtime_stats_enable(k_tid_t  thread)
 {
-	k_spinlock_key_t  key;
+	struct usage_lock_keys key;
 
 	CHECKIF(thread == NULL) {
 		return -EINVAL;
 	}
 
-	key = k_spin_lock(&usage_lock);
+	key = usage_lock_all();
 	struct _cpu *cpu = _current_cpu;
 
 	if (!thread->base.usage.track_usage) {
@@ -275,20 +337,20 @@ int k_thread_runtime_stats_enable(k_tid_t  thread)
 		}
 	}
 
-	k_spin_unlock(&usage_lock, key);
+	usage_unlock_all(key);
 
 	return 0;
 }
 
 int k_thread_runtime_stats_disable(k_tid_t  thread)
 {
-	k_spinlock_key_t key;
+	struct usage_lock_keys key;
 
 	CHECKIF(thread == NULL) {
 		return -EINVAL;
 	}
 
-	key = k_spin_lock(&usage_lock);
+	key = usage_lock_all();
 	struct _cpu *cpu = _current_cpu;
 
 	if (thread->base.usage.track_usage) {
@@ -305,7 +367,7 @@ int k_thread_runtime_stats_disable(k_tid_t  thread)
 		}
 	}
 
-	k_spin_unlock(&usage_lock, key);
+	usage_unlock_all(key);
 
 	return 0;
 }
@@ -319,9 +381,9 @@ bool k_thread_runtime_stats_is_enabled(k_tid_t thread)
 #ifdef CONFIG_SCHED_THREAD_USAGE_ALL
 void k_sys_runtime_stats_enable(void)
 {
-	k_spinlock_key_t  key;
+	struct usage_lock_keys key;
 
-	key = k_spin_lock(&usage_lock);
+	key = usage_lock_all();
 
 	if (_current_cpu->usage->track_usage) {
 
@@ -331,7 +393,7 @@ void k_sys_runtime_stats_enable(void)
 		 * nothing left to do.
 		 */
 
-		k_spin_unlock(&usage_lock, key);
+		usage_unlock_all(key);
 		return;
 	}
 
@@ -347,15 +409,15 @@ void k_sys_runtime_stats_enable(void)
 #endif /* CONFIG_SCHED_THREAD_USAGE_ANALYSIS */
 	}
 
-	k_spin_unlock(&usage_lock, key);
+	usage_unlock_all(key);
 }
 
 void k_sys_runtime_stats_disable(void)
 {
 	struct _cpu *cpu;
-	k_spinlock_key_t key;
+	struct usage_lock_keys key;
 
-	key = k_spin_lock(&usage_lock);
+	key = usage_lock_all();
 
 	if (!_current_cpu->usage->track_usage) {
 
@@ -365,7 +427,7 @@ void k_sys_runtime_stats_disable(void)
 		 * nothing left to do.
 		 */
 
-		k_spin_unlock(&usage_lock, key);
+		usage_unlock_all(key);
 		return;
 	}
 
@@ -381,18 +443,18 @@ void k_sys_runtime_stats_disable(void)
 		cpu->usage->track_usage = false;
 	}
 
-	k_spin_unlock(&usage_lock, key);
+	usage_unlock_all(key);
 }
 #endif /* CONFIG_SCHED_THREAD_USAGE_ALL */
 
 #ifdef CONFIG_OBJ_CORE_STATS_THREAD
 int z_thread_stats_raw(struct k_obj_core *obj_core, void *stats)
 {
-	k_spinlock_key_t  key;
+	struct usage_lock_keys key;
 
-	key = k_spin_lock(&usage_lock);
+	key = usage_lock_all();
 	memcpy(stats, obj_core->stats, sizeof(struct k_cycle_stats));
-	k_spin_unlock(&usage_lock, key);
+	usage_unlock_all(key);
 
 	return 0;
 }
@@ -410,12 +472,12 @@ int z_thread_stats_query(struct k_obj_core *obj_core, void *stats)
 
 int z_thread_stats_reset(struct k_obj_core *obj_core)
 {
-	k_spinlock_key_t  key;
+	struct usage_lock_keys key;
 	struct k_cycle_stats  *stats;
 	struct k_thread *thread;
 
 	thread = CONTAINER_OF(obj_core, struct k_thread, obj_core);
-	key = k_spin_lock(&usage_lock);
+	key = usage_lock_all();
 	stats = obj_core->stats;
 
 	stats->total = 0ULL;
@@ -435,7 +497,7 @@ int z_thread_stats_reset(struct k_obj_core *obj_core)
 		 * window.
 		 */
 
-		k_spin_unlock(&usage_lock, key);
+		usage_unlock_all(key);
 
 		return 0;
 	}
@@ -448,7 +510,7 @@ int z_thread_stats_reset(struct k_obj_core *obj_core)
 
 	_current_cpu->usage0 = now;
 
-	k_spin_unlock(&usage_lock, key);
+	usage_unlock_all(key);
 
 	return 0;
 }
@@ -483,11 +545,11 @@ int z_thread_stats_enable(struct k_obj_core *obj_core)
 #ifdef CONFIG_OBJ_CORE_STATS_SYSTEM
 int z_cpu_stats_raw(struct k_obj_core *obj_core, void *stats)
 {
-	k_spinlock_key_t  key;
+	struct usage_lock_keys key;
 
-	key = k_spin_lock(&usage_lock);
+	key = usage_lock_all();
 	memcpy(stats, obj_core->stats, sizeof(struct k_cycle_stats));
-	k_spin_unlock(&usage_lock, key);
+	usage_unlock_all(key);
 
 	return 0;
 }
@@ -507,12 +569,12 @@ int z_cpu_stats_query(struct k_obj_core *obj_core, void *stats)
 #ifdef CONFIG_OBJ_CORE_STATS_SYSTEM
 int z_kernel_stats_raw(struct k_obj_core *obj_core, void *stats)
 {
-	k_spinlock_key_t  key;
+	struct usage_lock_keys key;
 
-	key = k_spin_lock(&usage_lock);
+	key = usage_lock_all();
 	memcpy(stats, obj_core->stats,
 	       CONFIG_MP_MAX_NUM_CPUS * sizeof(struct k_cycle_stats));
-	k_spin_unlock(&usage_lock, key);
+	usage_unlock_all(key);
 
 	return 0;
 }

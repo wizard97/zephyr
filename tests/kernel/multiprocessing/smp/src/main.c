@@ -1300,6 +1300,82 @@ ZTEST(smp_stress, test_smp_switch_stress)
 	}
 }
 
+#if defined(CONFIG_THREAD_RUNTIME_STATS) && defined(CONFIG_SCHED_CPU_MASK)
+struct usage_migration_context {
+	struct k_sem gate;
+	struct k_sem done;
+	atomic_t visited;
+};
+
+static void usage_migration_worker(void *arg, void *unused1, void *unused2)
+{
+	struct usage_migration_context *ctx = arg;
+
+	ARG_UNUSED(unused1);
+	ARG_UNUSED(unused2);
+	for (int round = 0; round < 64; round++) {
+		k_sem_take(&ctx->gate, K_FOREVER);
+		atomic_or(&ctx->visited, BIT(curr_cpu()));
+		k_busy_wait(200);
+		k_sem_give(&ctx->done);
+	}
+}
+
+ZTEST(smp, test_runtime_usage_during_migration)
+{
+	struct usage_migration_context ctx = {0};
+	struct k_thread_runtime_stats stats = {0};
+	uint64_t previous = 0;
+	bool valid = true;
+	int cpus = arch_num_cpus();
+
+	k_sem_init(&ctx.gate, 0, 1);
+	k_sem_init(&ctx.done, 0, 1);
+	k_thread_create(&t2, t2_stack, T2_STACK_SIZE, usage_migration_worker,
+			&ctx, NULL, NULL, K_PRIO_PREEMPT(0), 0, K_FOREVER);
+	for (int round = 0; round < 64; round++) {
+		if (round != 0) {
+			k_thread_suspend(&t2);
+		}
+		if (k_thread_cpu_pin(&t2, round % cpus) != 0) {
+			valid = false;
+			break;
+		}
+		if (round == 0) {
+			k_thread_start(&t2);
+		} else {
+			k_thread_resume(&t2);
+		}
+		k_sem_give(&ctx.gate);
+		bool completed = false;
+
+		for (int poll = 0; poll < 5000; poll++) {
+			int ret = k_thread_runtime_stats_get(&t2, &stats);
+
+			valid &= (ret == 0) && (stats.total_cycles >= previous);
+			previous = stats.total_cycles;
+			if (k_sem_take(&ctx.done, K_NO_WAIT) == 0) {
+				completed = true;
+				break;
+			}
+			/* Let the worker run when it shares the reader's CPU. */
+			k_msleep(1);
+		}
+		if (!completed) {
+			valid = false;
+			break;
+		}
+	}
+	if (!valid) {
+		k_thread_abort(&t2);
+	}
+	zassert_equal(k_thread_join(&t2, K_SECONDS(5)), 0);
+	zassert_true(valid, "Runtime usage regressed or migration stalled");
+	zassert_true(previous > 0, "No runtime usage recorded");
+	zassert_equal(atomic_get(&ctx.visited), BIT_MASK(cpus));
+}
+#endif
+
 static void *smp_tests_setup(void)
 {
 	/* Sleep a bit to guarantee that both CPUs enter an idle

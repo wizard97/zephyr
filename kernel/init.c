@@ -397,7 +397,11 @@ void z_init_cpu(int id)
 		(K_KERNEL_STACK_BUFFER(z_interrupt_stacks[id]) +
 		 K_KERNEL_STACK_SIZEOF(z_interrupt_stacks[id]));
 #ifdef CONFIG_SCHED_THREAD_USAGE_ALL
+#ifdef Z_CPU_USAGE_CACHE_ALIGNED
+	_kernel.cpus[id].usage = &_kernel.usage[id].stats;
+#else
 	_kernel.cpus[id].usage = &_kernel.usage[id];
+#endif
 	_kernel.cpus[id].usage->track_usage =
 		CONFIG_SCHED_THREAD_USAGE_AUTO_ENABLE;
 #endif

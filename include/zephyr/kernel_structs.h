@@ -33,6 +33,17 @@
 #if defined(CONFIG_TIMEOUT_BACKEND_MINHEAP)
 #include <zephyr/sys/min_heap_ref.h>
 #endif
+#if defined(CONFIG_ARM64) && defined(CONFIG_SMP)
+#include <zephyr/arch/arm64/cpu.h>
+#define Z_KERNEL_CPU_ALIGN __aligned(L1_CACHE_BYTES)
+#else
+#define Z_KERNEL_CPU_ALIGN
+#endif
+#if defined(CONFIG_ARM64) && defined(CONFIG_SMP) && \
+	defined(CONFIG_SCHED_THREAD_USAGE_ALL) && !defined(CONFIG_OBJ_CORE_STATS_SYSTEM)
+#include <zephyr/arch/arm64/cpu.h>
+#define Z_CPU_USAGE_CACHE_ALIGNED 1
+#endif
 #endif
 
 #define K_NUM_THREAD_PRIO (CONFIG_NUM_PREEMPT_PRIORITIES + CONFIG_NUM_COOP_PRIORITIES + 1)
@@ -201,9 +212,21 @@ struct _cpu {
 
 	/* Per CPU architecture specifics */
 	struct _cpu_arch arch;
-};
+/* IRQ and scheduler writes on one CPU must not share another CPU's line. */
+} Z_KERNEL_CPU_ALIGN;
+
+#undef Z_KERNEL_CPU_ALIGN
 
 typedef struct _cpu _cpu_t;
+
+#ifdef Z_CPU_USAGE_CACHE_ALIGNED
+/* Independent accounting writers must not contend on a shared cache line.
+ * The object-core raw API retains its compact, contiguous representation.
+ */
+struct z_cpu_usage {
+	struct k_cycle_stats stats;
+} __aligned(L1_CACHE_BYTES);
+#endif
 
 struct z_kernel {
 	struct _cpu cpus[CONFIG_MP_MAX_NUM_CPUS];
@@ -224,7 +247,11 @@ struct z_kernel {
 	struct k_thread *threads; /* singly linked list of ALL threads */
 #endif
 #ifdef CONFIG_SCHED_THREAD_USAGE_ALL
+#ifdef Z_CPU_USAGE_CACHE_ALIGNED
+	struct z_cpu_usage usage[CONFIG_MP_MAX_NUM_CPUS];
+#else
 	struct k_cycle_stats usage[CONFIG_MP_MAX_NUM_CPUS];
+#endif
 #endif
 
 #ifdef CONFIG_OBJ_CORE_SYSTEM
