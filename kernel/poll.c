@@ -502,7 +502,10 @@ static inline void z_vrfy_k_poll_signal_init(struct k_poll_signal *sig)
 
 void z_impl_k_poll_signal_reset(struct k_poll_signal *sig)
 {
+	k_spinlock_key_t key = k_spin_lock(&poll_lock);
+
 	sig->signaled = 0U;
+	k_spin_unlock(&poll_lock, key);
 
 	SYS_PORT_TRACING_FUNC(k_poll_api, signal_reset, sig);
 }
@@ -510,8 +513,11 @@ void z_impl_k_poll_signal_reset(struct k_poll_signal *sig)
 void z_impl_k_poll_signal_check(struct k_poll_signal *sig,
 			       unsigned int *signaled, int *result)
 {
+	k_spinlock_key_t key = k_spin_lock(&poll_lock);
+
 	*signaled = sig->signaled;
 	*result = sig->result;
+	k_spin_unlock(&poll_lock, key);
 
 	SYS_PORT_TRACING_FUNC(k_poll_api, signal_check, sig);
 }

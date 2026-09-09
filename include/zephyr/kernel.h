@@ -7017,6 +7017,10 @@ __syscall void k_poll_signal_reset(struct k_poll_signal *sig);
 /**
  * @brief Fetch the signaled state and result value of a poll signal
  *
+ * The state and result are read together, serialized against signal raises
+ * and resets. Checking a signal does not consume it or prevent a subsequent
+ * raise or reset.
+ *
  * @param sig A poll signal object
  * @param signaled An integer buffer which will be written nonzero if the
  *		   object was signaled

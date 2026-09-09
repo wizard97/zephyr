@@ -302,10 +302,11 @@ been signaled.
         }
     }
 
-Note that poll signals are not internally synchronized. A :c:func:`k_poll` call
+Individual signal raises, checks, and resets are synchronized, but a sequence
+of these operations is not atomic. A :c:func:`k_poll` call
 that is passed a signal will return after any code in the system calls
 :c:func:`k_poll_signal_raise()`.  But if the signal is being
-externally managed and reset via :c:func:`k_poll_signal_init()`, it is
+externally managed and reset via :c:func:`k_poll_signal_reset()`, it is
 possible that by the time the application checks, the event state may
 no longer be equal to :c:macro:`K_POLL_STATE_SIGNALED`, and a (naive)
 application will miss events.  Best practice is always to reset the
