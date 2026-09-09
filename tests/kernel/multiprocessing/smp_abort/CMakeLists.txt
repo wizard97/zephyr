@@ -6,6 +6,10 @@ project(smp_abort)
 
 target_sources(app PRIVATE src/main.c)
 
+target_sources_ifdef(CONFIG_TEST_ABORT_PUBLICATION app PRIVATE
+  src/publication.c
+)
+
 target_include_directories(app PRIVATE
   ${ZEPHYR_BASE}/kernel/include
   ${ZEPHYR_BASE}/arch/${ARCH}/include

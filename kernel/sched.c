@@ -49,7 +49,6 @@ static void add_to_waitq_locked(struct k_thread *thread, _wait_q_t *wait_q);
 static inline void clear_halting(struct k_thread *thread)
 {
 	if (IS_ENABLED(CONFIG_SMP) && (CONFIG_MP_MAX_NUM_CPUS > 1)) {
-		barrier_dmem_fence_full(); /* Other cpus spin on this locklessly! */
 		thread->base.thread_state &= ~(_THREAD_ABORTING | _THREAD_SUSPENDING);
 	}
 }
@@ -290,7 +289,16 @@ static void thread_halt_spin(struct k_thread *thread, k_spinlock_key_t key)
 			    &key);
 	}
 	z_sched_spinlock_unlock(key);
-	while (z_is_thread_halting(thread)) {
+	for (;;) {
+		/* Acquire the halt cleanup before the caller can reuse thread storage. */
+		key = z_sched_spinlock_lock();
+		bool halting = z_is_thread_halting(thread);
+
+		z_sched_spinlock_unlock(key);
+		if (!halting) {
+			break;
+		}
+
 		unsigned int k = arch_irq_lock();
 
 		arch_spin_relax(); /* Requires interrupts be masked */

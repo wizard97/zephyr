@@ -1,0 +1,9 @@
+# SPDX-FileCopyrightText: Copyright The Zephyr Project Contributors
+# SPDX-License-Identifier: Apache-2.0
+
+source "Kconfig.zephyr"
+
+config TEST_ABORT_PUBLICATION
+	bool "Test remote abort cleanup publication"
+	depends on SMP && SCHED_CPU_MASK
+	select THREAD_ABORT_HOOK
