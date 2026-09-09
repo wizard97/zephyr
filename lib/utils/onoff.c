@@ -129,7 +129,7 @@ static int validate_args(const struct onoff_manager *mgr,
 	int rv = sys_notify_validate(&cli->notify);
 
 	if ((rv == 0)
-	    && ((cli->notify.flags
+	    && ((atomic_get(&cli->notify.flags)
 		 & ~BIT_MASK(ONOFF_CLIENT_EXTENSION_POS)) != 0)) {
 		rv = -EINVAL;
 	}

@@ -9,7 +9,7 @@
 
 static uint32_t get_extflags(const struct sys_notify *anp)
 {
-	uint32_t flags = anp->flags & SYS_NOTIFY_EXTENSION_MASK;
+	uint32_t flags = atomic_get(&anp->flags) & SYS_NOTIFY_EXTENSION_MASK;
 
 	return flags >> SYS_NOTIFY_EXTENSION_POS;
 }
@@ -17,8 +17,10 @@ static uint32_t get_extflags(const struct sys_notify *anp)
 static void set_extflags(struct sys_notify *anp,
 			 uint32_t flags)
 {
-	anp->flags = (anp->flags & ~SYS_NOTIFY_EXTENSION_MASK)
-		     | (flags << SYS_NOTIFY_EXTENSION_POS);
+	atomic_val_t value = atomic_get(&anp->flags);
+
+	atomic_set(&anp->flags, (value & ~SYS_NOTIFY_EXTENSION_MASK)
+		   | (flags << SYS_NOTIFY_EXTENSION_POS));
 }
 
 static void callback(struct sys_notify *anp,

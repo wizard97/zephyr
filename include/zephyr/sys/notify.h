@@ -9,6 +9,7 @@
 #define ZEPHYR_INCLUDE_SYS_NOTIFY_H_
 
 #include <zephyr/kernel.h>
+#include <zephyr/sys/atomic.h>
 #include <zephyr/types.h>
 
 #ifdef __cplusplus
@@ -161,8 +162,10 @@ struct sys_notify {
 	 * is managed by the service.  They are not for client use,
 	 * are zeroed by the async notify API init functions, and will
 	 * be zeroed by sys_notify_finalize().
+	 * Access these bits through the atomic API while the object is shared
+	 * with a client checking for completion.
 	 */
-	uint32_t volatile flags;
+	atomic_t flags;
 
 	/*
 	 * The result of the operation.
@@ -171,13 +174,13 @@ struct sys_notify {
 	 * async infrastructure.  This field is the sole record of
 	 * success or failure for spin-wait synchronous operations.
 	 */
-	int volatile result;
+	int result;
 };
 
 /** @internal */
 static inline uint32_t sys_notify_get_method(const struct sys_notify *notify)
 {
-	uint32_t method = notify->flags >> SYS_NOTIFY_METHOD_POS;
+	uint32_t method = (uint32_t)atomic_get(&notify->flags) >> SYS_NOTIFY_METHOD_POS;
 
 	return method & SYS_NOTIFY_METHOD_MASK;
 }
@@ -242,6 +245,7 @@ static inline int sys_notify_fetch_result(const struct sys_notify *notify,
 	int rv = -EAGAIN;
 
 	if (sys_notify_get_method(notify) == SYS_NOTIFY_METHOD_COMPLETED) {
+		/* The atomic completion observation acquires the result and service data. */
 		rv = 0;
 		*result = notify->result;
 	}

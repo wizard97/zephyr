@@ -23,6 +23,12 @@ the :ref:`release notes<zephyr_4.5>`.
 Common
 ******
 
+* Services accessing extension bits in :c:struct:`sys_notify` must use the
+  atomic API for shared accesses to ``flags``. The field has type
+  :c:type:`atomic_t` so completion can publish results between CPUs. This can
+  increase the structure size on platforms where ``atomic_t`` is wider than
+  32 bits. Notification initialization and ownership rules are unchanged.
+
 * Header files :file:`include/zephyr/sys_clock.h` is deprecated and will be removed in a future
   release. One shall include :file:`include/zephyr/sys/clock.h` instead.
 

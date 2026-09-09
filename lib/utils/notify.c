@@ -73,8 +73,7 @@ sys_notify_generic_callback sys_notify_finalize(struct sys_notify *notify,
 	 * completed state, releasing any spin-waiters, then complete
 	 * secondary notification.
 	 */
-	compiler_barrier();
-	notify->flags = SYS_NOTIFY_METHOD_COMPLETED;
+	atomic_set(&notify->flags, SYS_NOTIFY_METHOD_COMPLETED);
 
 	if (IS_ENABLED(CONFIG_POLL) && (sig != NULL)) {
 		k_poll_signal_raise(sig, res);

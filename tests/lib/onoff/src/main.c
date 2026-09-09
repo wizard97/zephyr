@@ -358,12 +358,12 @@ ZTEST(onoff_api, test_request)
 	zassert_equal(rc, -EINVAL,
 		      "req srv cli-uninit");
 
-	onoff_cli.notify.flags |= BIT(ONOFF_CLIENT_EXTENSION_POS);
+	atomic_set_bit(&onoff_cli.notify.flags, ONOFF_CLIENT_EXTENSION_POS);
 	rc = onoff_request(&onoff_srv, &onoff_cli);
 	zassert_equal(rc, -EINVAL,
 		      "req srv cli-flags");
 
-	onoff_cli.notify.flags &= ~BIT(ONOFF_CLIENT_EXTENSION_POS);
+	atomic_clear_bit(&onoff_cli.notify.flags, ONOFF_CLIENT_EXTENSION_POS);
 	rc = onoff_request(&onoff_srv, &onoff_cli);
 	zassert_equal(rc, 0,
 		      "req srv cli ok");

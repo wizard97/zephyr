@@ -18,6 +18,12 @@ operation-specific data from requests that include a notification
 element, and for invoking callbacks with the parameters required by the
 API.
 
+A successful :c:func:`sys_notify_fetch_result` acquires the result and the
+service's writes preceding :c:func:`sys_notify_finalize`. A client may therefore
+use spin-wait notification to consume a result produced on another CPU without
+an additional lock. This does not extend the lifetime of a containing object
+past the ownership rules documented by the service.
+
 A limitation is that this API is not suitable for :ref:`syscalls`
 because:
 
