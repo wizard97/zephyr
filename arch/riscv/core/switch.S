@@ -48,18 +48,23 @@ SECTION_FUNC(TEXT, z_riscv_switch)
 	/* Save the old thread's stack pointer */
 	sr sp, _thread_offset_to_sp(a1)
 
-	/* Set thread->switch_handle = thread to mark completion */
-	sr a1, ___thread_t_switch_handle_OFFSET(a1)
-
 #ifdef CONFIG_CUSTOM_STACK_GUARD
 	/* Disable the custom stack guard */
 	mv s0, a0
+	mv s1, a1
 	call z_riscv_custom_stack_guard_disable
 	mv a0, s0
+	mv a1, s1
 #endif /* CONFIG_CUSTOM_STACK_GUARD */
 
 	/* Get the new thread's stack pointer */
 	lr sp, _thread_offset_to_sp(a0)
+
+#ifdef CONFIG_SMP
+	/* Publish the saved context after the last use of the outgoing stack. */
+	fence rw, w
+#endif
+	sr a1, ___thread_t_switch_handle_OFFSET(a1)
 
 #ifdef CONFIG_CUSTOM_STACK_GUARD
 #ifdef CONFIG_USERSPACE

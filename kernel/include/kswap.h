@@ -55,7 +55,7 @@ void z_smp_release_global_lock(struct k_thread *thread);
 static inline void z_sched_switch_spin(struct k_thread *thread)
 {
 #ifdef CONFIG_SMP
-	volatile void **shp = (void *)&thread->switch_handle;
+	void *volatile const *shp = &thread->switch_handle;
 
 	while (*shp == NULL) {
 		arch_spin_relax();
