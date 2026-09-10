@@ -144,6 +144,13 @@ struct _ready_q {
 
 typedef struct _ready_q _ready_q_t;
 
+#if defined(CONFIG_SMP) && defined(CONFIG_DCACHE)
+/* Keep unrelated CPU-local updates from sharing cache lines. */
+#define Z_CPU_CACHE_ALIGN __aligned(CONFIG_DCACHE_LINE_SIZE)
+#else
+#define Z_CPU_CACHE_ALIGN
+#endif
+
 struct _cpu {
 	/* nested interrupt count */
 	uint32_t nested;
@@ -156,6 +163,11 @@ struct _cpu {
 
 	/* one assigned idle thread per CPU */
 	struct k_thread *idle_thread;
+
+#ifdef CONFIG_TIMESLICING
+	/* Timeouts can expire on another CPU, so this flag must be atomic. */
+	atomic_t slice_expired;
+#endif
 
 #ifdef CONFIG_SCHED_CPU_MASK_PIN_ONLY
 	struct _ready_q ready_q;
@@ -201,7 +213,7 @@ struct _cpu {
 
 	/* Per CPU architecture specifics */
 	struct _cpu_arch arch;
-};
+} Z_CPU_CACHE_ALIGN;
 
 typedef struct _cpu _cpu_t;
 

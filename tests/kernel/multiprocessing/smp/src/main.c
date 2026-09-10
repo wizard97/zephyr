@@ -1302,6 +1302,15 @@ ZTEST(smp_stress, test_smp_switch_stress)
 
 static void *smp_tests_setup(void)
 {
+#ifdef CONFIG_DCACHE
+	/* The complete CPU records must occupy disjoint cache lines. */
+	BUILD_ASSERT(sizeof(struct _cpu) % CONFIG_DCACHE_LINE_SIZE == 0);
+	for (unsigned int i = 0; i < CONFIG_MP_MAX_NUM_CPUS; i++) {
+		zassert_equal((uintptr_t)&_kernel.cpus[i] % CONFIG_DCACHE_LINE_SIZE, 0,
+			      "CPU %u record is not cache-line aligned", i);
+	}
+#endif
+
 	/* Sleep a bit to guarantee that both CPUs enter an idle
 	 * thread from which they can exit correctly to run the main
 	 * test.
