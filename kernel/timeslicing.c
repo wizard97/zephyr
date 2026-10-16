@@ -15,8 +15,14 @@ static int slice_ticks = DIV_ROUND_UP(CONFIG_TIMESLICE_SIZE * Z_HZ_ticks, Z_HZ_m
 static int slice_max_prio = CONFIG_TIMESLICE_PRIORITY;
 static struct _timeout slice_timeouts[CONFIG_MP_MAX_NUM_CPUS];
 
-/* Timeouts can expire on another CPU, so each CPU's flag must be atomic. */
-static atomic_t slice_expired[CONFIG_MP_MAX_NUM_CPUS];
+/* Timeouts can expire on another CPU, so each CPU's flag must be atomic.
+ * Keep the per-CPU flags on separate cache lines to avoid false sharing.
+ */
+struct slice_expiry {
+	atomic_t flag;
+} Z_DCACHE_ALIGN_SMP;
+
+static struct slice_expiry slice_expired[CONFIG_MP_MAX_NUM_CPUS];
 
 #ifdef CONFIG_SWAP_NONATOMIC
 /* If z_swap() isn't atomic, then it's possible for a timer interrupt
@@ -67,7 +73,7 @@ static void slice_timeout(struct _timeout *timeout)
 {
 	int cpu = ARRAY_INDEX(slice_timeouts, timeout);
 
-	atomic_set(&slice_expired[cpu], 1);
+	atomic_set(&slice_expired[cpu].flag, 1);
 
 	/* We need an IPI if we just handled a timeslice expiration
 	 * for a different CPU.
@@ -82,7 +88,7 @@ static void slice_reset(int slice_size)
 	int cpu = _current_cpu->id;
 
 	/* Best-effort cancel: if the slice timeout is already in flight,
-	 * its handler only flips slice_expired[cpu] (which we clear below)
+	 * its handler only flips slice_expired[cpu].flag (which we clear below)
 	 * and possibly raises an IPI -- harmless either way.
 	 */
 	(void)z_try_abort_timeout(&slice_timeouts[cpu]);
@@ -92,12 +98,12 @@ static void slice_reset(int slice_size)
 		 * announce window, so subtract 1 to cancel z_add_timeout()'s
 		 * "+1" round-up and land at exactly slice_size ticks.
 		 */
-		int delay = atomic_get(&slice_expired[cpu]) ? slice_size - 1 : slice_size;
+		int delay = atomic_get(&slice_expired[cpu].flag) ? slice_size - 1 : slice_size;
 
 		z_add_timeout(&slice_timeouts[cpu], slice_timeout,
 			      K_TICKS(delay));
 	}
-	atomic_clear(&slice_expired[cpu]);
+	atomic_clear(&slice_expired[cpu].flag);
 }
 
 void z_time_slice_reset(struct k_thread *thread)
@@ -156,7 +162,7 @@ void z_time_slice(void)
 	 * the scheduler lock to synchronize pending_current.
 	 */
 	if (!IS_ENABLED(CONFIG_SWAP_NONATOMIC) &&
-	    !atomic_get(&slice_expired[_current_cpu->id])) {
+	    !atomic_get(&slice_expired[_current_cpu->id].flag)) {
 		return;
 	}
 
@@ -174,7 +180,7 @@ void z_time_slice(void)
 
 	int slice_size = 0;
 
-	if (atomic_get(&slice_expired[_current_cpu->id])) {
+	if (atomic_get(&slice_expired[_current_cpu->id].flag)) {
 		slice_size = z_time_slice_size(curr);
 	}
 
