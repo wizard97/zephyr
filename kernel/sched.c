@@ -354,7 +354,7 @@ int z_pend_curr(struct k_spinlock *lock, k_spinlock_key_t key,
 	 * in every build rather than degrading into the corruption traced in
 	 * #111518. Placed first so the refusal performs no side effect.
 	 */
-	if (arch_is_in_isr()) {
+	if (arch_is_in_isr_irqlocked()) {
 		__ASSERT(false, "blocking pend from ISR context");
 		k_panic();
 	}
